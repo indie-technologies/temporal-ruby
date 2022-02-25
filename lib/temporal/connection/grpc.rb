@@ -118,13 +118,14 @@ module Temporal
 
         client.start_workflow_execution(request)
       rescue ::GRPC::AlreadyExists => e
-        cast_error = e.to_rpc_status&.details&.map do |any_error|
-          next unless any_error.type_url == 'type.googleapis.com/temporal.api.errordetails.v1.WorkflowExecutionAlreadyStartedFailure'
+        error_details_from(e).each do |error|
+          case error
+          when Temporal::Api::ErrorDetails::V1::WorkflowExecutionAlreadyStartedFailure
+            raise Temporal::WorkflowExecutionAlreadyStartedFailure.new(e.details, error.run_id)
+          end
+        end
 
-          any_error.unpack(Temporal::Api::ErrorDetails::V1::WorkflowExecutionAlreadyStartedFailure)
-        end&.compact&.first
-
-        raise Temporal::WorkflowExecutionAlreadyStartedFailure.new(e.details, cast_error&.run_id)
+        raise Temporal::ApiError, e.details # unhandled error type
       end
 
       SERVER_MAX_GET_WORKFLOW_EXECUTION_HISTORY_POLL = 30
@@ -138,7 +139,7 @@ module Temporal
         event_type: :all,
         timeout: nil
       )
-        if wait_for_new_event 
+        if wait_for_new_event
           if timeout.nil?
             # This is an internal error.  Wrappers should enforce this.
             raise "You must specify a timeout when wait_for_new_event = true."
@@ -366,7 +367,17 @@ module Temporal
           request.workflow_id_reuse_policy = policy
         end
 
+
         client.signal_with_start_workflow_execution(request)
+      rescue ::GRPC::AlreadyExists => e
+        error_details_from(e).each do |error|
+          case error
+          when Temporal::Api::ErrorDetails::V1::WorkflowExecutionAlreadyStartedFailure
+            raise Temporal::WorkflowExecutionAlreadyStartedFailure.new(e.details, error.run_id)
+          end
+        end
+
+        raise Temporal::ApiError, e.details # unhandled error type
       end
 
       def reset_workflow_execution(namespace:, workflow_id:, run_id:, reason:, workflow_task_event_id:)
@@ -487,6 +498,15 @@ module Temporal
 
       def can_poll?
         @poll
+      end
+
+      def error_details_from(error)
+        error.to_rpc_status&.details&.map do |any_error|
+          type = Google::Protobuf::DescriptorPool.generated_pool.lookup any_error.type_url.split('/').last
+          next if type.nil?
+
+          any_error.unpack type.msgclass
+        end&.compact
       end
     end
   end
