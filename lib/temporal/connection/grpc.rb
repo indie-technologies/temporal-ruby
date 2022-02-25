@@ -5,6 +5,7 @@ require 'temporal/connection/errors'
 require 'temporal/connection/serializer'
 require 'temporal/connection/serializer/failure'
 require 'gen/temporal/api/workflowservice/v1/service_services_pb'
+require 'gen/temporal/api/errordetails/v1/message_pb'
 require 'temporal/concerns/payloads'
 
 module Temporal
@@ -118,9 +119,13 @@ module Temporal
 
         client.start_workflow_execution(request)
       rescue ::GRPC::AlreadyExists => e
-        # Feel like there should be cleaner way to do this...
-        run_id = e.details[/RunId: ([a-f0-9]+-[a-f0-9]+-[a-f0-9]+-[a-f0-9]+-[a-f0-9]+)/, 1]
-        raise Temporal::WorkflowExecutionAlreadyStartedFailure.new(e.details, run_id)
+        cast_error = e.to_rpc_status&.details&.map do |any_error|
+          next unless any_error.type_url == 'type.googleapis.com/temporal.api.errordetails.v1.WorkflowExecutionAlreadyStartedFailure'
+
+          any_error.unpack(Temporal::Api::ErrorDetails::V1::WorkflowExecutionAlreadyStartedFailure)
+        end&.compact&.first
+
+        raise Temporal::WorkflowExecutionAlreadyStartedFailure.new(e.details, cast_error&.run_id)
       end
 
       SERVER_MAX_GET_WORKFLOW_EXECUTION_HISTORY_POLL = 30
