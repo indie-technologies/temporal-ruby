@@ -5,6 +5,7 @@ require 'temporal/errors'
 require 'temporal/thread_local_context'
 require 'temporal/workflow/history/event_target'
 require 'temporal/workflow/command'
+require 'temporal/workflow/context_helpers'
 require 'temporal/workflow/future'
 require 'temporal/workflow/replay_aware_logger'
 require 'temporal/workflow/state_manager'
@@ -101,6 +102,7 @@ module Temporal
         options = args.delete(:options) || {}
         input << args unless args.empty?
 
+        parent_close_policy = options.delete(:parent_close_policy)
         execution_options = ExecutionOptions.new(workflow_class, options, config.default_execution_options)
 
         command = Command::StartChildWorkflow.new(
@@ -110,8 +112,10 @@ module Temporal
           namespace: execution_options.namespace,
           task_queue: execution_options.task_queue,
           retry_policy: execution_options.retry_policy,
+          parent_close_policy: parent_close_policy,
           timeouts: execution_options.timeouts,
-          headers: execution_options.headers
+          headers: execution_options.headers,
+          memo: execution_options.memo,
         )
 
         target, cancelation_id = schedule_command(command)
@@ -126,6 +130,13 @@ module Temporal
           future.fail(exception)
           future.failure_callbacks.each { |callback| call_in_fiber(callback, exception) }
         end
+
+        # Temporal docs say that we *must* wait for the child to get spawned:
+        child_workflow_started = false
+        dispatcher.register_handler(target, 'started') do
+          child_workflow_started = true
+        end
+        wait_for { child_workflow_started }
 
         future
       end
@@ -348,6 +359,27 @@ module Temporal
         end
 
         future
+      end
+
+      # Replaces or adds the values of your custom search attributes specified during a workflow's execution.
+      # To use this your server must support Elasticsearch, and the attributes must be pre-configured
+      # See https://docs.temporal.io/docs/concepts/what-is-a-search-attribute/
+      #
+      # @param search_attributes [Hash]
+      #   If an attribute is registered as a Datetime, you can pass in a Time: e.g.
+      #     workflow.now
+      #   or as a string in UTC ISO-8601 format:
+      #     workflow.now.utc.iso8601
+      #   It would look like: "2022-03-01T17:39:06Z"
+      # @return [Hash] the search attributes after any preprocessing.
+      #
+      def upsert_search_attributes(search_attributes)
+        search_attributes = Helpers.process_search_attributes(search_attributes)
+        command = Command::UpsertSearchAttributes.new(
+          search_attributes: search_attributes
+        )
+        schedule_command(command)
+        search_attributes
       end
 
       private

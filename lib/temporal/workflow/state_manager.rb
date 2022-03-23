@@ -63,7 +63,7 @@ module Temporal
       end
 
       def release?(release_name)
-        track_release(release_name) unless releases.key?(release_name)
+        track_release(release_name)
 
         releases[release_name]
       end
@@ -241,6 +241,7 @@ module Temporal
           dispatch(target, 'failed', 'StandardError', from_payloads(event.attributes.cause))
 
         when 'CHILD_WORKFLOW_EXECUTION_STARTED'
+          dispatch(target, 'started')
           state_machine.start
 
         when 'CHILD_WORKFLOW_EXECUTION_COMPLETED'
@@ -283,7 +284,8 @@ module Temporal
           dispatch(target, 'completed')
 
         when 'UPSERT_WORKFLOW_SEARCH_ATTRIBUTES'
-          # todo
+          # no need to track state; this is just a synchronous API call.
+          discard_command(target)
 
         else
           raise UnsupportedEvent, event.type
@@ -307,6 +309,8 @@ module Temporal
             History::EventTarget::WORKFLOW_TYPE
           when Command::StartChildWorkflow
             History::EventTarget::CHILD_WORKFLOW_TYPE
+          when Command::UpsertSearchAttributes
+            History::EventTarget::UPSERT_SEARCH_ATTRIBUTES_REQUEST_TYPE
           when Command::SignalExternalWorkflow
             History::EventTarget::EXTERNAL_WORKFLOW_TYPE
           end
@@ -348,8 +352,9 @@ module Temporal
       def track_release(release_name)
         # replay does not allow untracked (via marker) releases
         if replay?
-          releases[release_name] = false
-        else
+          releases[release_name] = false unless releases.key?(release_name)
+        elsif !releases.fetch?(release_name, false)
+          # track the release if it hasn't been seen before or if it was previously false
           releases[release_name] = true
           schedule(Command::RecordMarker.new(name: RELEASE_MARKER, details: release_name))
         end

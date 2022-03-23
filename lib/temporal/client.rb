@@ -5,6 +5,7 @@ require 'temporal/activity/async_token'
 require 'temporal/workflow'
 require 'temporal/workflow/history'
 require 'temporal/workflow/execution_info'
+require 'temporal/workflow/status'
 require 'temporal/reset_strategy'
 
 module Temporal
@@ -132,8 +133,11 @@ module Temporal
     #
     # @param name [String] name of the new namespace
     # @param description [String] optional namespace description
-    def register_namespace(name, description = nil)
-      connection.register_namespace(name: name, description: description)
+    # @param is_global [Boolean] used to distinguish local namespaces from global namespaces (https://docs.temporal.io/docs/server/namespaces/#global-namespaces)
+    # @param retention_period [Int] optional value which specifies how long Temporal will keep workflows after completing
+    # @param data [Hash] optional key-value map for any customized purpose that can be retreived with describe_namespace
+    def register_namespace(name, description = nil, is_global: false, retention_period: 10, data: nil)
+      connection.register_namespace(name: name, description: description, is_global: is_global, retention_period: retention_period, data: data)
     end
 
     # Fetches metadata for a namespace.
@@ -359,6 +363,18 @@ module Temporal
       Workflow::History.new(history_response.history.events)
     end
 
+    def list_open_workflow_executions(namespace, from, to = Time.now, filter: {})
+      validate_filter(filter, :workflow, :workflow_id)
+
+      fetch_executions(:open, { namespace: namespace, from: from, to: to }.merge(filter))
+    end
+
+    def list_closed_workflow_executions(namespace, from, to = Time.now, filter: {})
+      validate_filter(filter, :status, :workflow, :workflow_id)
+
+      fetch_executions(:closed, { namespace: namespace, from: from, to: to }.merge(filter))
+    end
+
     class ResultConverter
       extend Concerns::Payloads
     end
@@ -400,6 +416,41 @@ module Temporal
         history.find_event_by_id(scheduled_event.attributes.workflow_task_completed_event_id)
       else
         raise ArgumentError, 'Unsupported reset strategy'
+      end
+    end
+    def validate_filter(filter, *allowed_filters)
+      if (filter.keys - allowed_filters).length > 0
+        raise ArgumentError, "Allowed filters are: #{allowed_filters}"
+      end
+
+      raise ArgumentError, 'Only one filter is allowed' if filter.size > 1
+    end
+
+    def fetch_executions(status, request_options)
+      api_method =
+        if status == :open
+          :list_open_workflow_executions
+        else
+          :list_closed_workflow_executions
+        end
+
+      executions = []
+      next_page_token = nil
+
+      loop do
+        response = connection.public_send(
+          api_method,
+          **request_options.merge(next_page_token: next_page_token)
+        )
+
+        executions += Array(response.executions)
+        next_page_token = response.next_page_token
+
+        break if next_page_token.to_s.empty?
+      end
+
+      executions.map do |raw_execution|
+        Temporal::Workflow::ExecutionInfo.generate_from(raw_execution)
       end
     end
   end
