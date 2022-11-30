@@ -181,16 +181,14 @@ module Temporal
     # @param workflow [Temporal::Workflow, nil] workflow class or nil
     # @param workflow_id [String]
     # @param run_id [String]
-    # @param reason [String]
     # @param namespace [String, nil] if nil, choose the one declared on the workflow class or the
     #   global default
-    def request_cancel_workflow_execution(workflow, workflow_id, run_id, reason = nil, namespace: nil)
+    def request_cancel_workflow_execution(workflow, workflow_id, run_id, namespace: nil)
       execution_options = ExecutionOptions.new(workflow, {}, config.default_execution_options)
 
       connection.request_cancel_workflow_execution(
         namespace: namespace || execution_options.namespace,
         workflow_id: workflow_id,
-        reason: reason,
         run_id: run_id,
       )
     end

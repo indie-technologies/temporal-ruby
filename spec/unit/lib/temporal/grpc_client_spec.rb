@@ -8,7 +8,7 @@ describe Temporal::Connection::GRPC do
 
   before do
     allow(subject).to receive(:client).and_return(grpc_stub)
-    
+
     allow(Time).to receive(:now).and_return(now)
   end
 
@@ -35,7 +35,7 @@ describe Temporal::Connection::GRPC do
       end
     end
   end
-  
+
   describe '#signal_with_start_workflow' do
     let(:temporal_response) do
       Temporal::Api::WorkflowService::V1::SignalWithStartWorkflowExecutionResponse.new(run_id: 'xxx')
@@ -99,6 +99,29 @@ describe Temporal::Connection::GRPC do
     end
   end
 
+  describe '#request_cancel_workflow_execution' do
+    let(:response) do
+      Temporal::Api::WorkflowService::V1::RequestCancelWorkflowExecutionResponse.new
+    end
+
+    before { allow(grpc_stub).to receive(:request_cancel_workflow_execution).and_return(response) }
+
+    it 'calls GRPC service with supplied arguments' do
+      subject.request_cancel_workflow_execution(
+        namespace: namespace,
+        workflow_id: workflow_id,
+        run_id: run_id
+      )
+
+      expect(grpc_stub).to have_received(:request_cancel_workflow_execution) do |request|
+        expect(request).to be_an_instance_of(Temporal::Api::WorkflowService::V1::RequestCancelWorkflowExecutionRequest)
+        expect(request.namespace).to eq(namespace)
+        expect(request.workflow_execution.workflow_id).to eq(workflow_id)
+        expect(request.workflow_execution.run_id).to eq(run_id)
+      end
+    end
+  end
+
   describe '#get_workflow_execution_history' do
     let(:response) do
       Temporal::Api::WorkflowService::V1::GetWorkflowExecutionHistoryResponse.new(
@@ -148,7 +171,7 @@ describe Temporal::Connection::GRPC do
         end
       end
 
-      it 'demands a timeout to be specified' do 
+      it 'demands a timeout to be specified' do
         expect do
           subject.get_workflow_execution_history(
             namespace: namespace,
@@ -161,7 +184,7 @@ describe Temporal::Connection::GRPC do
         end
       end
 
-      it 'disallows a timeout larger than the server timeout' do 
+      it 'disallows a timeout larger than the server timeout' do
         expect do
           subject.get_workflow_execution_history(
             namespace: namespace,
@@ -261,7 +284,7 @@ describe Temporal::Connection::GRPC do
         end
       end
     end
-    
+
     describe '#list_closed_workflow_executions' do
       let(:namespace) { 'test-namespace' }
       let(:from) { Time.now - 600 }

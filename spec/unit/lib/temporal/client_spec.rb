@@ -343,20 +343,6 @@ describe Temporal::Client do
           namespace: 'default-test-namespace',
           workflow_id: 'workflow_id',
           run_id: 'run_id',
-          reason: nil,
-        )
-    end
-
-    it 'requests with reason' do
-      subject.request_cancel_workflow_execution(TestStartWorkflow, 'workflow_id', 'run_id', 'reason')
-
-      expect(connection)
-        .to have_received(:request_cancel_workflow_execution)
-        .with(
-          namespace: 'default-test-namespace',
-          workflow_id: 'workflow_id',
-          run_id: 'run_id',
-          reason: 'reason',
         )
     end
 
@@ -369,7 +355,6 @@ describe Temporal::Client do
           namespace: 'other-test-namespace',
           workflow_id: 'workflow_id',
           run_id: 'run_id',
-          reason: nil,
         )
     end
   end
