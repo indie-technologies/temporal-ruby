@@ -261,7 +261,7 @@ describe Temporal::Client do
     it 'raises when signal_input is given but signal_name is not' do
       expect do
         subject.start_workflow(
-          TestStartWorkflow, 
+          TestStartWorkflow,
           [42, 54],
           [43, 55],
           options: { signal_input: 'what do you get if you multiply six by nine?', }
@@ -321,13 +321,55 @@ describe Temporal::Client do
 
   describe '#describe_namespace' do
     before { allow(connection).to receive(:describe_namespace).and_return(Temporal::Api::WorkflowService::V1::DescribeNamespaceResponse.new) }
-    
+
     it 'passes the namespace to the connection' do
       result = subject.describe_namespace('new-namespace')
 
       expect(connection)
         .to have_received(:describe_namespace)
         .with(name: 'new-namespace')
+    end
+  end
+
+  describe '#request_cancel_workflow_execution' do
+    before { allow(connection).to receive(:request_cancel_workflow_execution).and_return(nil) }
+
+    it 'makes the request' do
+      subject.request_cancel_workflow_execution(TestStartWorkflow, 'workflow_id', 'run_id')
+
+      expect(connection)
+        .to have_received(:request_cancel_workflow_execution)
+        .with(
+          namespace: 'default-test-namespace',
+          workflow_id: 'workflow_id',
+          run_id: 'run_id',
+        )
+    end
+
+    it 'requests with reason' do
+      subject.request_cancel_workflow_execution(TestStartWorkflow, 'workflow_id', 'run_id', 'reason')
+
+      expect(connection)
+        .to have_received(:request_cancel_workflow_execution)
+        .with(
+          namespace: 'default-test-namespace',
+          workflow_id: 'workflow_id',
+          run_id: 'run_id',
+          input: 'reason',
+        )
+    end
+
+    it 'requests with namespace' do
+      subject.request_cancel_workflow_execution(TestStartWorkflow, 'workflow_id', 'run_id', namespace: 'other-test-namespace')
+
+      expect(connection)
+        .to have_received(:request_cancel_workflow_execution)
+        .with(
+          namespace: 'other-test-namespace',
+          workflow_id: 'workflow_id',
+          run_id: 'run_id',
+          reason: nil,
+        )
     end
   end
 
@@ -341,7 +383,7 @@ describe Temporal::Client do
         .to have_received(:signal_workflow_execution)
         .with(
           namespace: 'default-test-namespace',
-          signal: 'signal', 
+          signal: 'signal',
           workflow_id: 'workflow_id',
           run_id: 'run_id',
           input: nil,
@@ -355,7 +397,7 @@ describe Temporal::Client do
         .to have_received(:signal_workflow_execution)
         .with(
           namespace: 'default-test-namespace',
-          signal: 'signal', 
+          signal: 'signal',
           workflow_id: 'workflow_id',
           run_id: 'run_id',
           input: 'input',
@@ -369,7 +411,7 @@ describe Temporal::Client do
         .to have_received(:signal_workflow_execution)
         .with(
           namespace: 'other-test-namespace',
-          signal: 'signal', 
+          signal: 'signal',
           workflow_id: 'workflow_id',
           run_id: 'run_id',
           input: nil,
@@ -409,7 +451,7 @@ describe Temporal::Client do
       )
     end
 
-    it 'can override the namespace' do 
+    it 'can override the namespace' do
       completed_event = Fabricate(:workflow_completed_event, result: nil)
       response = Fabricate(:workflow_execution_history, events: [completed_event])
 
@@ -494,7 +536,7 @@ describe Temporal::Client do
       end.to raise_error(Temporal::WorkflowCanceled)
     end
 
-    it 'raises TimeoutError when the server times out' do 
+    it 'raises TimeoutError when the server times out' do
       response = Fabricate(:workflow_execution_history, events: [])
       expect(connection)
         .to receive(:get_workflow_execution_history)
