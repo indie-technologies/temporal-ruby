@@ -343,6 +343,7 @@ describe Temporal::Client do
           namespace: 'default-test-namespace',
           workflow_id: 'workflow_id',
           run_id: 'run_id',
+          reason: nil,
         )
     end
 
@@ -355,7 +356,7 @@ describe Temporal::Client do
           namespace: 'default-test-namespace',
           workflow_id: 'workflow_id',
           run_id: 'run_id',
-          input: 'reason',
+          reason: 'reason',
         )
     end
 

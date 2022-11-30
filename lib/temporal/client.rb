@@ -190,9 +190,8 @@ module Temporal
       connection.request_cancel_workflow_execution(
         namespace: namespace || execution_options.namespace,
         workflow_id: workflow_id,
+        reason: reason,
         run_id: run_id,
-        signal: signal,
-        input: input
       )
     end
 
