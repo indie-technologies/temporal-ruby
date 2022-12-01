@@ -20,4 +20,4 @@ jobs:
         bundler-cache: true
         ruby-version: '2.7.5'
 
-    - run: bundle exec rspec
+    - run: bundle exec rspec --format documentation
