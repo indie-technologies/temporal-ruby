@@ -16,15 +16,15 @@ describe Temporal do
         expect(client).to have_received(method).with(*args, kwargs)
       end
     end
-    
+
     describe '.start_workflow' do
       it_behaves_like 'a forwarded method', :start_workflow, 'TestWorkflow', 42
-    end    
-    
+    end
+
     describe '.schedule_workflow' do
       it_behaves_like 'a forwarded method', :schedule_workflow, 'TestWorkflow', '* * * * *', 42
-    end    
-    
+    end
+
     describe '.register_namespace' do
       it_behaves_like 'a forwarded method', :register_namespace, 'test-namespace', 'This is a test namespace'
     end
@@ -32,21 +32,25 @@ describe Temporal do
     describe '.describe_namespace' do
       it_behaves_like 'a forwarded method', :describe_namespace, 'test-namespace'
     end
-    
+
     describe '.signal_workflow' do
       it_behaves_like 'a forwarded method', :signal_workflow, 'TestWorkflow', 'TST_SIGNAL', 'x', 'y'
     end
-    
+
     describe '.await_workflow_result' do
       it_behaves_like 'a forwarded method', :await_workflow_result, 'TestWorkflow', workflow_id: 'x'
     end
-    
+
     describe '.reset_workflow' do
       it_behaves_like 'a forwarded method', :reset_workflow, 'test-namespace', 'x', 'y'
     end
 
     describe '.terminate_workflow' do
       it_behaves_like 'a forwarded method', :terminate_workflow, 'x'
+    end
+
+    describe '.request_cancel_workflow_execution' do
+      it_behaves_like 'a forwarded method', :request_cancel_workflow_execution, 'x', 'y', 'z'
     end
 
     describe '.fetch_workflow_execution_info' do
@@ -82,7 +86,7 @@ describe Temporal do
       expect(described_class.logger).to eq(described_class.configuration.logger)
     end
   end
-  
+
   describe '.metrics' do
     it 'returns preconfigured Temporal metrics' do
       expect(described_class.metrics).to an_instance_of(Temporal::Metrics)
