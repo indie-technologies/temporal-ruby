@@ -27,7 +27,8 @@ module Temporal
                  :complete_activity,
                  :fail_activity,
                  :list_open_workflow_executions,
-                 :list_closed_workflow_executions
+                 :list_closed_workflow_executions,
+                 :request_cancel_workflow_execution
 
   class << self
     def configure(&block)
@@ -35,7 +36,7 @@ module Temporal
     end
 
     def configuration
-      warn '[DEPRECATION] This method is now deprecated without a substitution'
+      # warn '[DEPRECATION] This method is now deprecated without a substitution'
       config
     end
 
@@ -48,11 +49,11 @@ module Temporal
     end
 
     private
-    
+
     def default_client
       @default_client ||= Client.new(config)
     end
-    
+
     def config
       @config ||= Configuration.new
     end

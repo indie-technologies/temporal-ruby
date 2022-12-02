@@ -301,8 +301,16 @@ module Temporal
         raise NotImplementedError
       end
 
-      def request_cancel_workflow_execution
-        raise NotImplementedError
+      def request_cancel_workflow_execution(namespace:, workflow_id:, run_id:)
+        request = Temporal::Api::WorkflowService::V1::RequestCancelWorkflowExecutionRequest.new(
+          namespace: namespace,
+          workflow_execution: Temporal::Api::Common::V1::WorkflowExecution.new(
+            workflow_id: workflow_id,
+            run_id: run_id
+          ),
+          identity: identity,
+        )
+        client.request_cancel_workflow_execution(request)
       end
 
       def signal_workflow_execution(namespace:, workflow_id:, run_id:, signal:, input: nil)
