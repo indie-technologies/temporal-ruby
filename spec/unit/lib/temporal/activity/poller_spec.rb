@@ -6,6 +6,7 @@ describe Temporal::Activity::Poller do
   let(:connection) { instance_double('Temporal::Connection::GRPC', cancel_polling_request: nil) }
   let(:namespace) { 'test-namespace' }
   let(:task_queue) { 'test-task-queue' }
+  let(:max_tasks_per_second) { 100_000 }
   let(:lookup) { instance_double('Temporal::ExecutableLookup') }
   let(:thread_pool) do
     instance_double(Temporal::ThreadPool, wait_for_available_threads: nil, shutdown: nil)
@@ -13,8 +14,13 @@ describe Temporal::Activity::Poller do
   let(:config) { Temporal::Configuration.new }
   let(:middleware_chain) { instance_double(Temporal::Middleware::Chain) }
   let(:middleware) { [] }
+  let(:options) {
+    {
+      max_tasks_per_second: max_tasks_per_second,
+    }
+  }
 
-  subject { described_class.new(namespace, task_queue, lookup, config, middleware) }
+  subject { described_class.new(namespace, task_queue, lookup, config, middleware, options) }
 
   before do
     allow(Temporal::Connection).to receive(:generate).and_return(connection)
@@ -35,7 +41,7 @@ describe Temporal::Activity::Poller do
 
       expect(connection)
         .to have_received(:poll_activity_task_queue)
-        .with(namespace: namespace, task_queue: task_queue)
+        .with(namespace: namespace, task_queue: task_queue, max_tasks_per_second: max_tasks_per_second)
         .twice
     end
 
