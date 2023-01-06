@@ -212,7 +212,7 @@ module Temporal
             name: task_queue
           ),
           task_queue_metadata: Temporal::Api::TaskQueue::V1::TaskQueueMetadata.new(
-            max_tasks_per_second: max_tasks_per_second,
+            max_tasks_per_second: Google::Protobuf::DoubleValue.new(value: max_tasks_per_second),
           ),
         )
 
