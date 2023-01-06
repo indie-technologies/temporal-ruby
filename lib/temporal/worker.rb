@@ -11,7 +11,8 @@ module Temporal
     def initialize(
       config = Temporal.configuration,
       activity_thread_pool_size: Temporal::Activity::Poller::DEFAULT_OPTIONS[:thread_pool_size],
-      workflow_thread_pool_size: Temporal::Workflow::Poller::DEFAULT_OPTIONS[:thread_pool_size]
+      workflow_thread_pool_size: Temporal::Workflow::Poller::DEFAULT_OPTIONS[:thread_pool_size],
+      task_queue_activities_per_second: Temporal::Activity::Poller::DEFAULT_OPTIONS[:max_tasks_per_second]
     )
       @config = config
       @workflows = Hash.new { |hash, key| hash[key] = ExecutableLookup.new }
@@ -22,6 +23,7 @@ module Temporal
       @shutting_down = false
       @activity_poller_options = {
         thread_pool_size: activity_thread_pool_size,
+        max_tasks_per_second: task_queue_activities_per_second,
       }
       @workflow_poller_options = {
         thread_pool_size: workflow_thread_pool_size,
