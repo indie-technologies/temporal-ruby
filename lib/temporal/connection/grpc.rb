@@ -1,5 +1,6 @@
 require 'grpc'
 require 'time'
+require 'google/protobuf'
 require 'google/protobuf/well_known_types'
 require 'securerandom'
 require 'gen/temporal/api/filter/v1/message_pb'
