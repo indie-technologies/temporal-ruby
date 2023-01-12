@@ -144,7 +144,7 @@ describe Temporal::Worker do
           an_instance_of(Temporal::ExecutableLookup),
           config,
           [],
-          thread_pool_size: 10
+          { thread_pool_size: 10 },
         )
         .and_return(workflow_poller_1)
 
@@ -156,7 +156,7 @@ describe Temporal::Worker do
           an_instance_of(Temporal::ExecutableLookup),
           config,
           [],
-          thread_pool_size: 10
+          { thread_pool_size: 10 },
         )
         .and_return(workflow_poller_2)
 
