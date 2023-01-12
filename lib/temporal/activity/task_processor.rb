@@ -34,7 +34,7 @@ module Temporal
           raise ActivityNotRegistered, 'Activity is not registered with this worker'
         end
 
-        result = middleware_chain.invoke(**metadata.to_h) do
+        result = middleware_chain.invoke(metadata) do
           activity_class.execute_in_context(context, from_payloads(task.input))
         end
 
