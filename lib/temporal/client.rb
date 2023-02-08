@@ -3,8 +3,10 @@ require 'temporal/connection'
 require 'temporal/activity'
 require 'temporal/activity/async_token'
 require 'temporal/workflow'
+require 'temporal/workflow/context_helpers'
 require 'temporal/workflow/history'
 require 'temporal/workflow/execution_info'
+require 'temporal/workflow/executions'
 require 'temporal/workflow/status'
 require 'temporal/reset_strategy'
 
@@ -35,6 +37,7 @@ module Temporal
     # @option options [Hash] :retry_policy check Temporal::RetryPolicy for available options
     # @option options [Hash] :timeouts check Temporal::Configuration::DEFAULT_TIMEOUTS
     # @option options [Hash] :headers
+    # @option options [Hash] :search_attributes
     #
     # @return [String] workflow's run ID
     def start_workflow(workflow, *input, options: {}, **args)
@@ -60,6 +63,7 @@ module Temporal
           workflow_id_reuse_policy: options[:workflow_id_reuse_policy],
           headers: execution_options.headers,
           memo: execution_options.memo,
+          search_attributes: Workflow::Context::Helpers.process_search_attributes(execution_options.search_attributes),
         )
       else
         raise ArgumentError, 'If signal_input is provided, you must also provide signal_name' if signal_name.nil?
@@ -76,6 +80,7 @@ module Temporal
           workflow_id_reuse_policy: options[:workflow_id_reuse_policy],
           headers: execution_options.headers,
           memo: execution_options.memo,
+          search_attributes: Workflow::Context::Helpers.process_search_attributes(execution_options.search_attributes),
           signal_name: signal_name,
           signal_input: signal_input
         )
@@ -100,6 +105,7 @@ module Temporal
     # @option options [Hash] :retry_policy check Temporal::RetryPolicy for available options
     # @option options [Hash] :timeouts check Temporal::Configuration::DEFAULT_TIMEOUTS
     # @option options [Hash] :headers
+    # @option options [Hash] :search_attributes
     #
     # @return [String] workflow's run ID
     def schedule_workflow(workflow, cron_schedule, *input, options: {}, **args)
@@ -123,7 +129,8 @@ module Temporal
         workflow_id_reuse_policy: options[:workflow_id_reuse_policy],
         headers: execution_options.headers,
         cron_schedule: cron_schedule,
-        memo: execution_options.memo
+        memo: execution_options.memo,
+        search_attributes: Workflow::Context::Helpers.process_search_attributes(execution_options.search_attributes),
       )
 
       response.run_id
@@ -190,6 +197,29 @@ module Temporal
         namespace: namespace || execution_options.namespace,
         workflow_id: workflow_id,
         run_id: run_id,
+      )
+    end
+
+    # Issue a query against a running workflow
+    #
+    # @param workflow [Temporal::Workflow, nil] workflow class or nil
+    # @param query [String] name of the query to issue
+    # @param workflow_id [String]
+    # @param run_id [String]
+    # @param args [String, Array, nil] optional arguments for the query
+    # @param namespace [String, nil] if nil, choose the one declared on the workflow class or the
+    #   global default
+    # @param query_reject_condition [Symbol] check Temporal::Connection::GRPC::QUERY_REJECT_CONDITION
+    def query_workflow(workflow, query, workflow_id, run_id, *args, namespace: nil, query_reject_condition: nil)
+      execution_options = ExecutionOptions.new(workflow, {}, config.default_execution_options)
+
+      connection.query_workflow(
+        namespace: namespace || execution_options.namespace,
+        workflow_id: workflow_id,
+        run_id: run_id,
+        query: query,
+        args: args,
+        query_reject_condition: query_reject_condition
       )
     end
 
@@ -380,16 +410,24 @@ module Temporal
       Workflow::History.new(history_response.history.events)
     end
 
-    def list_open_workflow_executions(namespace, from, to = Time.now, filter: {})
+    def list_open_workflow_executions(namespace, from, to = Time.now, filter: {}, next_page_token: nil, max_page_size: nil)
       validate_filter(filter, :workflow, :workflow_id)
 
-      fetch_executions(:open, { namespace: namespace, from: from, to: to }.merge(filter))
+      Temporal::Workflow::Executions.new(connection: connection, status: :open, request_options: { namespace: namespace, from: from, to: to, next_page_token: next_page_token, max_page_size: max_page_size}.merge(filter))
     end
 
-    def list_closed_workflow_executions(namespace, from, to = Time.now, filter: {})
+    def list_closed_workflow_executions(namespace, from, to = Time.now, filter: {}, next_page_token: nil, max_page_size: nil)
       validate_filter(filter, :status, :workflow, :workflow_id)
 
-      fetch_executions(:closed, { namespace: namespace, from: from, to: to }.merge(filter))
+      Temporal::Workflow::Executions.new(connection: connection, status: :closed, request_options: { namespace: namespace, from: from, to: to, next_page_token: next_page_token, max_page_size: max_page_size}.merge(filter))
+    end
+
+    def query_workflow_executions(namespace, query, next_page_token: nil, max_page_size: nil)
+      Temporal::Workflow::Executions.new(connection: connection, status: :all, request_options: { namespace: namespace, query: query, next_page_token: next_page_token, max_page_size: max_page_size }.merge(filter))
+    end
+
+    def connection
+      @connection ||= Temporal::Connection.generate(config.for_connection)
     end
 
     class ResultConverter
@@ -400,10 +438,6 @@ module Temporal
     private
 
     attr_reader :config
-
-    def connection
-      @connection ||= Temporal::Connection.generate(config.for_connection)
-    end
 
     def compute_run_timeout(execution_options)
       execution_options.timeouts[:run] || execution_options.timeouts[:execution]
@@ -443,32 +477,5 @@ module Temporal
       raise ArgumentError, 'Only one filter is allowed' if filter.size > 1
     end
 
-    def fetch_executions(status, request_options)
-      api_method =
-        if status == :open
-          :list_open_workflow_executions
-        else
-          :list_closed_workflow_executions
-        end
-
-      executions = []
-      next_page_token = nil
-
-      loop do
-        response = connection.public_send(
-          api_method,
-          **request_options.merge(next_page_token: next_page_token)
-        )
-
-        executions += Array(response.executions)
-        next_page_token = response.next_page_token
-
-        break if next_page_token.to_s.empty?
-      end
-
-      executions.map do |raw_execution|
-        Temporal::Workflow::ExecutionInfo.generate_from(raw_execution)
-      end
-    end
   end
 end

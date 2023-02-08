@@ -10,6 +10,7 @@ require 'temporal/connection/serializer'
 require 'temporal/connection/serializer/failure'
 require 'gen/temporal/api/workflowservice/v1/service_services_pb'
 require 'gen/temporal/api/errordetails/v1/message_pb'
+require 'temporal/connection/serializer/workflow_id_reuse_policy'
 require 'temporal/concerns/payloads'
 
 module Temporal
@@ -17,15 +18,15 @@ module Temporal
     class GRPC
       include Concerns::Payloads
 
-      WORKFLOW_ID_REUSE_POLICY = {
-        allow_failed: Temporal::Api::Enums::V1::WorkflowIdReusePolicy::WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY,
-        allow: Temporal::Api::Enums::V1::WorkflowIdReusePolicy::WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE,
-        reject: Temporal::Api::Enums::V1::WorkflowIdReusePolicy::WORKFLOW_ID_REUSE_POLICY_REJECT_DUPLICATE
-      }.freeze
-
       HISTORY_EVENT_FILTER = {
         all: Temporal::Api::Enums::V1::HistoryEventFilterType::HISTORY_EVENT_FILTER_TYPE_ALL_EVENT,
         close: Temporal::Api::Enums::V1::HistoryEventFilterType::HISTORY_EVENT_FILTER_TYPE_CLOSE_EVENT,
+      }.freeze
+
+      QUERY_REJECT_CONDITION = {
+        none: Temporal::Api::Enums::V1::QueryRejectCondition::QUERY_REJECT_CONDITION_NONE,
+        not_open: Temporal::Api::Enums::V1::QueryRejectCondition::QUERY_REJECT_CONDITION_NOT_OPEN,
+        not_completed_cleanly: Temporal::Api::Enums::V1::QueryRejectCondition::QUERY_REJECT_CONDITION_NOT_COMPLETED_CLEANLY
       }.freeze
 
       DEFAULT_OPTIONS = {
@@ -94,7 +95,8 @@ module Temporal
         workflow_id_reuse_policy: nil,
         headers: nil,
         cron_schedule: nil,
-        memo: nil
+        memo: nil,
+        search_attributes: nil
       )
         request = Temporal::Api::WorkflowService::V1::StartWorkflowExecutionRequest.new(
           identity: identity,
@@ -103,6 +105,7 @@ module Temporal
             name: workflow_name
           ),
           workflow_id: workflow_id,
+          workflow_id_reuse_policy: Temporal::Connection::Serializer::WorkflowIdReusePolicy.new(workflow_id_reuse_policy).to_proto,
           task_queue: Temporal::Api::TaskQueue::V1::TaskQueue.new(
             name: task_queue
           ),
@@ -117,15 +120,11 @@ module Temporal
           cron_schedule: cron_schedule,
           memo: Temporal::Api::Common::V1::Memo.new(
             fields: to_payload_map(memo || {})
-          )
+          ),
+          search_attributes: Temporal::Api::Common::V1::SearchAttributes.new(
+            indexed_fields: to_payload_map(search_attributes || {})
+          ),
         )
-
-        if workflow_id_reuse_policy
-          policy = WORKFLOW_ID_REUSE_POLICY[workflow_id_reuse_policy]
-          raise Client::ArgumentError, 'Unknown workflow_id_reuse_policy specified' unless policy
-
-          request.workflow_id_reuse_policy = policy
-        end
 
         client.start_workflow_execution(request)
       rescue ::GRPC::AlreadyExists => e
@@ -174,13 +173,14 @@ module Temporal
         client.get_workflow_execution_history(request, deadline: deadline)
       end
 
-      def poll_workflow_task_queue(namespace:, task_queue:)
+      def poll_workflow_task_queue(namespace:, task_queue:, binary_checksum:)
         request = Temporal::Api::WorkflowService::V1::PollWorkflowTaskQueueRequest.new(
           identity: identity,
           namespace: namespace,
           task_queue: Temporal::Api::TaskQueue::V1::TaskQueue.new(
             name: task_queue
-          )
+          ),
+          binary_checksum: binary_checksum
         )
 
         poll_mutex.synchronize do
@@ -191,23 +191,40 @@ module Temporal
         poll_request.execute
       end
 
-      def respond_workflow_task_completed(namespace:, task_token:, commands:)
+      def respond_query_task_completed(namespace:, task_token:, query_result:)
+        query_result_proto = Serializer.serialize(query_result)
+        request = Temporal::Api::WorkflowService::V1::RespondQueryTaskCompletedRequest.new(
+          task_token: task_token,
+          namespace: namespace,
+          completed_type: query_result_proto.result_type,
+          query_result: query_result_proto.answer,
+          error_message: query_result_proto.error_message,
+        )
+
+        client.respond_query_task_completed(request)
+      end
+
+      def respond_workflow_task_completed(namespace:, task_token:, commands:, binary_checksum:, query_results: {})
         request = Temporal::Api::WorkflowService::V1::RespondWorkflowTaskCompletedRequest.new(
           namespace: namespace,
           identity: identity,
           task_token: task_token,
-          commands: Array(commands).map { |(_, command)| Serializer.serialize(command) }
+          commands: Array(commands).map { |(_, command)| Serializer.serialize(command) },
+          query_results: query_results.transform_values { |value| Serializer.serialize(value) },
+          binary_checksum: binary_checksum
         )
+
         client.respond_workflow_task_completed(request)
       end
 
-      def respond_workflow_task_failed(namespace:, task_token:, cause:, exception: nil)
+      def respond_workflow_task_failed(namespace:, task_token:, cause:, exception:, binary_checksum:)
         request = Temporal::Api::WorkflowService::V1::RespondWorkflowTaskFailedRequest.new(
           namespace: namespace,
           identity: identity,
           task_token: task_token,
           cause: cause,
-          failure: Serializer::Failure.new(exception).to_proto
+          failure: Serializer::Failure.new(exception).to_proto,
+          binary_checksum: binary_checksum
         )
         client.respond_workflow_task_failed(request)
       end
@@ -344,7 +361,8 @@ module Temporal
         cron_schedule: nil,
         signal_name:,
         signal_input:,
-        memo: nil
+        memo: nil,
+        search_attributes: nil
       )
         proto_header_fields = if headers.nil?
             to_payload_map({})
@@ -363,6 +381,7 @@ module Temporal
             name: workflow_name
           ),
           workflow_id: workflow_id,
+          workflow_id_reuse_policy: Temporal::Connection::Serializer::WorkflowIdReusePolicy.new(workflow_id_reuse_policy).to_proto,
           task_queue: Temporal::Api::TaskQueue::V1::TaskQueue.new(
             name: task_queue
           ),
@@ -380,6 +399,9 @@ module Temporal
           memo: Temporal::Api::Common::V1::Memo.new(
             fields: to_payload_map(memo || {})
           ),
+          search_attributes: Temporal::Api::Common::V1::SearchAttributes.new(
+            indexed_fields: to_payload_map(search_attributes || {})
+          ),
         )
 
         if workflow_id_reuse_policy
@@ -388,7 +410,6 @@ module Temporal
 
           request.workflow_id_reuse_policy = policy
         end
-
 
         client.signal_with_start_workflow_execution(request)
       rescue ::GRPC::AlreadyExists => e
@@ -436,10 +457,10 @@ module Temporal
         client.terminate_workflow_execution(request)
       end
 
-      def list_open_workflow_executions(namespace:, from:, to:, next_page_token: nil, workflow_id: nil, workflow: nil)
+      def list_open_workflow_executions(namespace:, from:, to:, next_page_token: nil, workflow_id: nil, workflow: nil, max_page_size: nil)
         request = Temporal::Api::WorkflowService::V1::ListOpenWorkflowExecutionsRequest.new(
           namespace: namespace,
-          maximum_page_size: options[:max_page_size],
+          maximum_page_size: max_page_size.nil? ? options[:max_page_size] : max_page_size,
           next_page_token: next_page_token,
           start_time_filter: serialize_time_filter(from, to),
           execution_filter: serialize_execution_filter(workflow_id),
@@ -448,10 +469,10 @@ module Temporal
         client.list_open_workflow_executions(request)
       end
 
-      def list_closed_workflow_executions(namespace:, from:, to:, next_page_token: nil, workflow_id: nil, workflow: nil, status: nil)
+      def list_closed_workflow_executions(namespace:, from:, to:, next_page_token: nil, workflow_id: nil, workflow: nil, status: nil, max_page_size: nil)
         request = Temporal::Api::WorkflowService::V1::ListClosedWorkflowExecutionsRequest.new(
           namespace: namespace,
-          maximum_page_size: options[:max_page_size],
+          maximum_page_size: max_page_size.nil? ? options[:max_page_size] : max_page_size,
           next_page_token: next_page_token,
           start_time_filter: serialize_time_filter(from, to),
           execution_filter: serialize_execution_filter(workflow_id),
@@ -461,8 +482,14 @@ module Temporal
         client.list_closed_workflow_executions(request)
       end
 
-      def list_workflow_executions
-        raise NotImplementedError
+      def list_workflow_executions(namespace:, query:, next_page_token: nil, max_page_size: nil)
+        request = Temporal::Api::WorkflowService::V1::ListWorkflowExecutionsRequest.new(
+          namespace: namespace,
+          page_size: max_page_size.nil? ? options[:max_page_size] : max_page_size,
+          next_page_token: next_page_token,
+          query: query
+        )
+        client.list_workflow_executions(request)
       end
 
       def list_archived_workflow_executions
@@ -473,15 +500,15 @@ module Temporal
         raise NotImplementedError
       end
 
-      def count_workflow_executions
-        raise NotImplementedError
+      def count_workflow_executions(namespace:, query:)
+        request = Temporal::Api::WorkflowService::V1::CountWorkflowExecutionsRequest.new(
+          namespace: namespace,
+          query: query
+        )
+        client.count_workflow_executions(request)
       end
 
       def get_search_attributes
-        raise NotImplementedError
-      end
-
-      def respond_query_task_completed
         raise NotImplementedError
       end
 
@@ -489,8 +516,39 @@ module Temporal
         raise NotImplementedError
       end
 
-      def query_workflow
-        raise NotImplementedError
+      def query_workflow(namespace:, workflow_id:, run_id:, query:, args: nil, query_reject_condition: nil)
+        request = Temporal::Api::WorkflowService::V1::QueryWorkflowRequest.new(
+          namespace: namespace,
+          execution: Temporal::Api::Common::V1::WorkflowExecution.new(
+            workflow_id: workflow_id,
+            run_id: run_id
+          ),
+          query: Temporal::Api::Query::V1::WorkflowQuery.new(
+            query_type: query,
+            query_args: to_query_payloads(args)
+          )
+        )
+        if query_reject_condition
+          condition = QUERY_REJECT_CONDITION[query_reject_condition]
+          raise Client::ArgumentError, 'Unknown query_reject_condition specified' unless condition
+
+          request.query_reject_condition = condition
+        end
+
+        begin
+          response = client.query_workflow(request)
+        rescue ::GRPC::InvalidArgument => e
+          raise Temporal::QueryFailed, e.details
+        end
+
+        if response.query_rejected
+          rejection_status = response.query_rejected.status || 'not specified by server'
+          raise Temporal::QueryFailed, "Query rejected: status #{rejection_status}"
+        elsif !response.query_result
+          raise Temporal::QueryFailed, 'Invalid response from server'
+        else
+          from_query_payloads(response.query_result)
+        end
       end
 
       def describe_workflow_execution(namespace:, workflow_id:, run_id:)

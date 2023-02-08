@@ -58,7 +58,7 @@ module Temporal
           attempt: 1,
           workflow_run_id: run_id,
           workflow_id: workflow_id,
-          workflow_name: nil, # not yet used, but will be in the future
+          workflow_name: self.metadata.name,
           headers: execution_options.headers,
           heartbeat_details: nil,
           scheduled_at: Time.now,
@@ -108,7 +108,7 @@ module Temporal
           attempt: 1,
           workflow_run_id: run_id,
           workflow_id: workflow_id,
-          workflow_name: nil, # not yet used, but will be in the future
+          workflow_name: self.metadata.name,
           headers: execution_options.headers,
           heartbeat_details: nil,
           scheduled_at: Time.now,
@@ -131,8 +131,22 @@ module Temporal
         workflow_id = SecureRandom.uuid
         run_id = SecureRandom.uuid
         execution_options = ExecutionOptions.new(workflow_class, options, config.default_execution_options)
+
+        child_metadata = Temporal::Metadata::Workflow.new(
+          namespace: execution_options.namespace,
+          id: workflow_id,
+          name: execution_options.name, # Workflow class name
+          run_id: run_id,
+          parent_id: @workflow_id,
+          parent_run_id: @run_id,
+          attempt: 1,
+          task_queue: execution_options.task_queue,
+          headers: execution_options.headers,
+          run_started_at: Time.now,
+          memo: {},
+        )
         context = Temporal::Testing::LocalWorkflowContext.new(
-          execution, workflow_id, run_id, workflow_class.disabled_releases, execution_options.headers
+          execution, workflow_id, run_id, workflow_class.disabled_releases, child_metadata
         )
 
         workflow_class.execute_in_context(context, input)
@@ -170,14 +184,18 @@ module Temporal
         return
       end
 
-      def wait_for(*futures, &unblock_condition)
-        if futures.empty? && unblock_condition.nil?
-          raise 'You must pass either a future or an unblock condition block to wait_for'
-        end
+      def wait_for_any(*futures)
+        return if futures.empty?
 
-        while (futures.empty? || futures.none?(&:finished?)) && (!unblock_condition || !unblock_condition.call)
-          Fiber.yield
-        end
+        Fiber.yield while futures.none?(&:finished?)
+
+        return
+      end
+
+      def wait_until(&unblock_condition)
+        raise 'You must pass an unblock condition block to wait_for' if unblock_condition.nil?
+
+        Fiber.yield until unblock_condition.call
 
         return
       end
@@ -186,8 +204,12 @@ module Temporal
         Time.now
       end
 
-      def on_signal(&block)
+      def on_signal(signal_name = nil, &block)
         raise NotImplementedError, 'Signals are not available when Temporal::Testing.local! is on'
+      end
+
+      def on_query(query, &block)
+        raise NotImplementedError, 'Queries are not available when Temporal::Testing.local! is on'
       end
 
       def cancel_activity(activity_id)
@@ -204,6 +226,9 @@ module Temporal
 
       def upsert_search_attributes(search_attributes)
         search_attributes = Temporal::Workflow::Context::Helpers.process_search_attributes(search_attributes)
+        if search_attributes.empty?
+          raise ArgumentError, "Cannot upsert an empty hash for search_attributes, as this would do nothing."
+        end
         execution.upsert_search_attributes(search_attributes)
       end
 

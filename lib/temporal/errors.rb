@@ -15,6 +15,12 @@ module Temporal
   # Represents any timeout
   class TimeoutError < ClientError; end
 
+  # Represents when a child workflow times out
+  class ChildWorkflowTimeoutError < Error; end
+
+  # Represents when a child workflow is terminated
+  class ChildWorkflowTerminatedError < Error; end
+
   # A superclass for activity exceptions raised explicitly
   # with the intent to propagate to a workflow
   class ActivityException < ClientError; end
@@ -24,6 +30,7 @@ module Temporal
 
   class ActivityNotRegistered < ClientError; end
   class WorkflowNotRegistered < ClientError; end
+  class SecondDynamicActivityError < ClientError; end
 
   class ApiError < Error; end
 
@@ -57,7 +64,7 @@ module Temporal
   class WorkflowExecutionAlreadyStartedFailure < ApiError
     attr_reader :run_id
 
-    def initialize(message, run_id)
+    def initialize(message, run_id = nil)
       super(message)
       @run_id = run_id
     end
@@ -67,7 +74,6 @@ module Temporal
   class FeatureVersionNotSupportedFailure < ApiError; end
   class NamespaceAlreadyExistsFailure < ApiError; end
   class CancellationAlreadyRequestedFailure < ApiError; end
-  class QueryFailedFailure < ApiError; end
+  class QueryFailed < ApiError; end
   class UnexpectedResponse < ApiError; end
-
 end

@@ -3,16 +3,16 @@ require 'temporal/metrics_adapters/null'
 require 'temporal/connection/converter/payload/nil'
 require 'temporal/connection/converter/payload/bytes'
 require 'temporal/connection/converter/payload/json'
+require 'temporal/connection/converter/payload/proto_json'
 require 'temporal/connection/converter/composite'
 
 module Temporal
   class Configuration
-    Connection = Struct.new(:type, :host, :port, :credentials, keyword_init: true)
-    Execution = Struct.new(:namespace, :task_queue, :timeouts, :headers, keyword_init: true)
+    Connection = Struct.new(:type, :host, :port, :credentials, :identity, keyword_init: true)
+    Execution = Struct.new(:namespace, :task_queue, :timeouts, :headers, :search_attributes, keyword_init: true)
 
     attr_reader :timeouts, :error_handlers
-    attr_writer :converter
-    attr_accessor :connection_type, :host, :port, :credentials, :logger, :metrics_adapter, :namespace, :task_queue, :headers
+    attr_accessor :connection_type, :converter, :host, :port, :credentials, :identity, :logger, :metrics_adapter, :namespace, :task_queue, :headers, :search_attributes
 
     # See https://docs.temporal.io/blog/activity-timeouts/ for general docs.
     # We want an infinite execution timeout for cron schedules and other perpetual workflows.
@@ -39,7 +39,8 @@ module Temporal
       payload_converters: [
         Temporal::Connection::Converter::Payload::Nil.new,
         Temporal::Connection::Converter::Payload::Bytes.new,
-        Temporal::Connection::Converter::Payload::JSON.new,
+        Temporal::Connection::Converter::Payload::ProtoJSON.new,
+        Temporal::Connection::Converter::Payload::JSON.new
       ]
     ).freeze
 
@@ -53,6 +54,9 @@ module Temporal
       @headers = DEFAULT_HEADERS
       @converter = DEFAULT_CONVERTER
       @error_handlers = []
+      @credentials = :this_channel_is_insecure
+      @identity = nil
+      @search_attributes = {}
     end
 
     def on_error(&block)
@@ -71,16 +75,13 @@ module Temporal
       @timeouts = DEFAULT_TIMEOUTS.merge(new_timeouts)
     end
 
-    def converter
-      @converter
-    end
-
     def for_connection
       Connection.new(
         type: connection_type,
         host: host,
         port: port,
         credentials: credentials,
+        identity: identity || default_identity
       ).freeze
     end
 
@@ -89,8 +90,18 @@ module Temporal
         namespace: namespace,
         task_queue: task_list,
         timeouts: timeouts,
-        headers: headers
+        headers: headers,
+        search_attributes: search_attributes
       ).freeze
+    end
+
+    private
+
+    def default_identity
+      hostname = `hostname`
+      pid = Process.pid
+
+      "#{pid}@#{hostname}".freeze
     end
   end
 end
