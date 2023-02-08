@@ -1,5 +1,6 @@
 require 'temporal/connection/serializer/base'
 require 'temporal/connection/serializer/retry_policy'
+require 'temporal/connection/serializer/workflow_id_reuse_policy'
 require 'temporal/concerns/payloads'
 
 module Temporal
@@ -30,7 +31,10 @@ module Temporal
                 retry_policy: Temporal::Connection::Serializer::RetryPolicy.new(object.retry_policy).to_proto,
                 parent_close_policy: serialize_parent_close_policy(object.parent_close_policy),
                 header: serialize_headers(object.headers),
+                cron_schedule: object.cron_schedule,
                 memo: serialize_memo(object.memo),
+                workflow_id_reuse_policy: Temporal::Connection::Serializer::WorkflowIdReusePolicy.new(object.workflow_id_reuse_policy).to_proto,
+                search_attributes: serialize_search_attributes(object.search_attributes),
               )
           )
         end
@@ -57,6 +61,12 @@ module Temporal
           end
 
           PARENT_CLOSE_POLICY[parent_close_policy]
+        end
+
+        def serialize_search_attributes(search_attributes)
+          return unless search_attributes
+
+          Temporal::Api::Common::V1::SearchAttributes.new(indexed_fields: to_payload_map(search_attributes))
         end
       end
     end

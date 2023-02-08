@@ -5,6 +5,7 @@ require 'time'
 
 describe Temporal::Testing::LocalWorkflowContext do
   let(:workflow_id) { 'workflow_id_1' }
+  let(:workflow_name) { 'HelloWorldWorkflow' }
   let(:run_id) { 'run_id_1' }
   let(:execution) { Temporal::Testing::WorkflowExecution.new }
   let(:task_queue) { 'my_test_queue' }
@@ -17,8 +18,10 @@ describe Temporal::Testing::LocalWorkflowContext do
       Temporal::Metadata::Workflow.new(
         namespace: 'ruby-samples',
         id: workflow_id,
-        name: 'HelloWorldWorkflow',
+        name: workflow_name,
         run_id: run_id,
+        parent_id: nil,
+        parent_run_id: nil,
         attempt: 1,
         task_queue: task_queue,
         headers: {},
@@ -58,6 +61,14 @@ describe Temporal::Testing::LocalWorkflowContext do
   class TestAsyncActivity < Temporal::Activity
     def execute
       activity.async
+    end
+  end
+
+  class MetadataCapturingActivity < Temporal::Activity
+    def execute
+      # activity.metadata is private, which we work around in order to write unit tests that
+      # can observe activity metadata
+      activity.send :metadata
     end
   end
 
@@ -137,6 +148,18 @@ describe Temporal::Testing::LocalWorkflowContext do
       # Heartbeat doesn't do anything in local mode, but at least it can be called.
       workflow_context.execute_activity!(TestHeartbeatingActivity)
     end
+
+    it 'has accurate metadata' do
+      result = workflow_context.execute_activity!(MetadataCapturingActivity)
+      expect(result.attempt).to eq(1)
+      expect(result.headers).to eq({})
+      expect(result.id).to eq(1)
+      expect(result.name).to eq('MetadataCapturingActivity')
+      expect(result.namespace).to eq('default-namespace')
+      expect(result.workflow_id).to eq(workflow_id)
+      expect(result.workflow_name).to eq(workflow_name)
+      expect(result.workflow_run_id).to eq(run_id)
+    end
   end
 
   describe '#wait_for' do
@@ -144,7 +167,7 @@ describe Temporal::Testing::LocalWorkflowContext do
       can_continue = false
       exited = false
       fiber = Fiber.new do
-        workflow_context.wait_for do
+        workflow_context.wait_until do
           can_continue
         end
 
@@ -165,7 +188,7 @@ describe Temporal::Testing::LocalWorkflowContext do
       future = workflow_context.execute_activity(TestAsyncActivity)
 
       fiber = Fiber.new do
-        workflow_context.wait_for(future) do
+        workflow_context.wait_for_any(future) do
           false
         end
 
@@ -189,7 +212,7 @@ describe Temporal::Testing::LocalWorkflowContext do
       future.wait
 
       fiber = Fiber.new do
-        workflow_context.wait_for(future, async_future)
+        workflow_context.wait_for_any(future, async_future)
         exited = true
       end
 
