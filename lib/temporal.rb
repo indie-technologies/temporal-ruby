@@ -34,7 +34,6 @@ module Temporal
                  :query_workflow_executions,
                  :connection
 
-
   class << self
     def configure(&block)
       yield config
