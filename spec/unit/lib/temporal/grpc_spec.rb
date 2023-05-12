@@ -267,9 +267,9 @@ describe Temporal::Connection::GRPC do
           timeout: timeout
         )
 
-        expect(grpc_stub).to have_received(:get_workflow_execution_history) do |request, deadline:|
+        expect(grpc_stub).to have_received(:get_workflow_execution_history) do |request, *args|
           expect(request.wait_new_event).to eq(true)
-          expect(deadline).to eq(now + timeout)
+          expect(args[0][:deadline]).to eq(now + timeout)
         end
       end
 

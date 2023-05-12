@@ -163,7 +163,7 @@ module Temporal
           history_event_filter_type: HISTORY_EVENT_FILTER[event_type]
         )
         deadline = timeout ? Time.now + timeout : nil
-        client.get_workflow_execution_history(request, deadline: deadline)
+        client.get_workflow_execution_history(request, deadline:)
       end
 
       def poll_workflow_task_queue(namespace:, task_queue:, binary_checksum:)
