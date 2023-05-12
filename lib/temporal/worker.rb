@@ -8,11 +8,24 @@ module Temporal
   class Worker
     # activity_thread_pool_size: number of threads that the poller can use to run activities.
     #   can be set to 1 if you want no paralellism in your activities, at the cost of throughput.
+
+    # binary_checksum: The binary checksum identifies the version of workflow worker code. It is set on each completed or failed workflow
+    #   task. It is present in API responses that return workflow execution info, and is shown in temporal-web and tctl.
+    #   It is traditionally a checksum of the application binary. However, Temporal server treats this as an opaque
+    #   identifier and it does not have to be a "checksum". Typical values for a Ruby application might include the hash
+    #   of the latest git commit or a semantic version number.
+    #
+    #   It can be used to reset workflow history to before a "bad binary" was deployed. Bad checksum values can also
+    #   be marked at the namespace level. This will cause Temporal server to reject any polling for workflow tasks
+    #   from workers with these bad versions.
+    #
+    #   See https://docs.temporal.io/docs/tctl/how-to-use-tctl/#recovery-from-bad-deployment----auto-reset-workflow
     def initialize(
       config = Temporal.configuration,
       activity_thread_pool_size: Temporal::Activity::Poller::DEFAULT_OPTIONS[:thread_pool_size],
       workflow_thread_pool_size: Temporal::Workflow::Poller::DEFAULT_OPTIONS[:thread_pool_size],
       task_queue_activities_per_second: Temporal::Activity::Poller::DEFAULT_OPTIONS[:max_tasks_per_second]
+      binary_checksum: Temporal::Workflow::Poller::DEFAULT_OPTIONS[:binary_checksum]
     )
       @config = config
       @workflows = Hash.new { |hash, key| hash[key] = ExecutableLookup.new }
@@ -27,6 +40,7 @@ module Temporal
       }
       @workflow_poller_options = {
         thread_pool_size: workflow_thread_pool_size,
+        binary_checksum: binary_checksum
       }
     end
 
@@ -38,10 +52,24 @@ module Temporal
     end
 
     def register_activity(activity_class, options = {})
-      execution_options = ExecutionOptions.new(activity_class, options, config.default_execution_options)
-      key = [execution_options.namespace, execution_options.task_queue]
-
+      key, execution_options = activity_registration(activity_class, options)
       @activities[key].add(execution_options.name, activity_class)
+    end
+
+    # Register one special activity that you want to intercept any unknown Activities,
+    # perhaps so you can delegate work to other classes, somewhat analogous to ruby's method_missing.
+    # Only one dynamic Activity may be registered per task queue.
+    # Within Activity#execute, you may retrieve the name of the unknown class via activity.name.
+    def register_dynamic_activity(activity_class, options = {})
+      key, execution_options = activity_registration(activity_class, options)
+      begin
+        @activities[key].add_dynamic(execution_options.name, activity_class)
+      rescue Temporal::ExecutableLookup::SecondDynamicExecutableError => e
+        raise Temporal::SecondDynamicActivityError,
+          "Temporal::Worker#register_dynamic_activity: cannot register #{execution_options.name} "\
+          "dynamically; #{e.previous_executable_name} was already registered dynamically for task queue "\
+          "'#{execution_options.task_queue}', and there can be only one."
+      end
     end
 
     def add_workflow_task_middleware(middleware_class, *args)
@@ -100,10 +128,17 @@ module Temporal
       Activity::Poller.new(namespace, task_queue, lookup.freeze, config, activity_middleware, activity_poller_options)
     end
 
+    def activity_registration(activity_class, options)
+      execution_options = ExecutionOptions.new(activity_class, options, config.default_execution_options)
+      key = [execution_options.namespace, execution_options.task_queue]
+      [key, execution_options]
+    end
+
     def trap_signals
       %w[TERM INT].each do |signal|
         Signal.trap(signal) { stop }
       end
     end
+
   end
 end

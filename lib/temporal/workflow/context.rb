@@ -7,8 +7,11 @@ require 'temporal/workflow/history/event_target'
 require 'temporal/workflow/command'
 require 'temporal/workflow/context_helpers'
 require 'temporal/workflow/future'
+require 'temporal/workflow/child_workflow_future'
 require 'temporal/workflow/replay_aware_logger'
+require 'temporal/workflow/stack_trace_tracker'
 require 'temporal/workflow/state_manager'
+require 'temporal/workflow/signal'
 
 # This context class is available in the workflow implementation
 # and provides context and methods for interacting with Temporal
@@ -18,13 +21,24 @@ module Temporal
     class Context
       attr_reader :metadata, :config
 
-      def initialize(state_manager, dispatcher, workflow_class, metadata, config)
+      def initialize(state_manager, dispatcher, workflow_class, metadata, config, query_registry, track_stack_trace)
         @state_manager = state_manager
         @dispatcher = dispatcher
+        @query_registry = query_registry
         @workflow_class = workflow_class
         @metadata = metadata
         @completed = false
         @config = config
+
+        if track_stack_trace
+          @stack_trace_tracker = StackTraceTracker.new
+        else
+          @stack_trace_tracker = nil
+        end
+
+        query_registry.register(StackTraceTracker::STACK_TRACE_QUERY_NAME) do
+          stack_trace_tracker&.to_s
+        end
       end
 
       def completed?
@@ -103,6 +117,8 @@ module Temporal
         input << args unless args.empty?
 
         parent_close_policy = options.delete(:parent_close_policy)
+        cron_schedule = options.delete(:cron_schedule)
+        workflow_id_reuse_policy = options.delete(:workflow_id_reuse_policy)
         execution_options = ExecutionOptions.new(workflow_class, options, config.default_execution_options)
 
         command = Command::StartChildWorkflow.new(
@@ -115,30 +131,39 @@ module Temporal
           parent_close_policy: parent_close_policy,
           timeouts: execution_options.timeouts,
           headers: execution_options.headers,
+          cron_schedule: cron_schedule,
           memo: execution_options.memo,
+          workflow_id_reuse_policy: workflow_id_reuse_policy,
+          search_attributes: Helpers.process_search_attributes(execution_options.search_attributes),
         )
 
         target, cancelation_id = schedule_command(command)
-        future = Future.new(target, self, cancelation_id: cancelation_id)
+
+        child_workflow_future = ChildWorkflowFuture.new(target, self, cancelation_id: cancelation_id)
 
         dispatcher.register_handler(target, 'completed') do |result|
-          future.set(result)
-          future.success_callbacks.each { |callback| call_in_fiber(callback, result) }
+          child_workflow_future.set(result)
+          child_workflow_future.success_callbacks.each { |callback| call_in_fiber(callback, result) }
         end
 
         dispatcher.register_handler(target, 'failed') do |exception|
-          future.fail(exception)
-          future.failure_callbacks.each { |callback| call_in_fiber(callback, exception) }
+          # if the child workflow didn't start already then also fail that future
+          unless child_workflow_future.child_workflow_execution_future.ready?
+            child_workflow_future.child_workflow_execution_future.fail(exception)
+            child_workflow_future.child_workflow_execution_future.failure_callbacks.each { |callback| call_in_fiber(callback, exception) }
+          end
+
+          child_workflow_future.fail(exception)
+          child_workflow_future.failure_callbacks.each { |callback| call_in_fiber(callback, exception) }
         end
 
-        # Temporal docs say that we *must* wait for the child to get spawned:
-        child_workflow_started = false
-        dispatcher.register_handler(target, 'started') do
-          child_workflow_started = true
+        dispatcher.register_handler(target, 'started') do |event|
+          # once the workflow starts, complete the child workflow execution future
+          child_workflow_future.child_workflow_execution_future.set(event)
+          child_workflow_future.child_workflow_execution_future.success_callbacks.each { |callback| call_in_fiber(callback, result) }
         end
-        wait_for { child_workflow_started }
 
-        future
+        child_workflow_future
       end
 
       def execute_workflow!(workflow_class, *input, **args)
@@ -148,6 +173,11 @@ module Temporal
         raise result if future.failed?
 
         result
+      end
+
+      def schedule_workflow(workflow_class, cron_schedule, *input, **args)
+        args[:options] = (args[:options] || {}).merge(cron_schedule: cron_schedule)
+        execute_workflow(workflow_class, *input, **args)
       end
 
       def side_effect(&block)
@@ -223,65 +253,69 @@ module Temporal
           retry_policy: execution_options.retry_policy,
           headers: execution_options.headers,
           memo: execution_options.memo,
+          search_attributes: Helpers.process_search_attributes(execution_options.search_attributes),
         )
         schedule_command(command)
         completed!
       end
 
+      # Block workflow progress until all futures finish
       def wait_for_all(*futures)
         futures.each(&:wait)
 
         return
       end
 
-      # Block workflow progress until any future is finished or any unblock_condition
-      # block evaluates to true.
-      def wait_for(*futures, &unblock_condition)
-        if futures.empty? && unblock_condition.nil?
-          raise 'You must pass either a future or an unblock condition block to wait_for'
-        end
+      # Block workflow progress until one of the futures completes. Passing
+      # in an empty array will immediately unblock.
+      def wait_for_any(*futures)
+        return if futures.empty? || futures.any?(&:finished?)
 
         fiber = Fiber.current
-        should_yield = false
-        blocked = true
 
-        if futures.any?
-          if futures.any?(&:finished?)
-            blocked = false
-          else
-            should_yield = true
-            futures.each do |future|
-              dispatcher.register_handler(future.target, Dispatcher::WILDCARD) do
-                if blocked && future.finished?
-                  # Because this block can run for any dispatch, ensure the fiber is only
-                  # resumed one time by checking if it's already been unblocked.
-                  blocked = false
-                  fiber.resume
-                end
-              end
-            end
+        handlers = futures.map do |future|
+          dispatcher.register_handler(future.target, Dispatcher::WILDCARD) do
+            fiber.resume if future.finished?
           end
         end
 
-        if blocked && unblock_condition
-          if unblock_condition.call
-            blocked = false
-            should_yield = false
-          else
-            should_yield = true
-
-            dispatcher.register_handler(Dispatcher::TARGET_WILDCARD, Dispatcher::WILDCARD) do
-              # Because this block can run for any dispatch, ensure the fiber is only
-              # resumed one time by checking if it's already been unblocked.
-              if blocked && unblock_condition.call
-                blocked = false
-                fiber.resume
-              end
-            end
-          end
+        stack_trace_tracker&.record
+        begin
+          Fiber.yield
+        ensure
+          stack_trace_tracker&.clear
+          handlers.each(&:unregister)
         end
 
-        Fiber.yield if should_yield
+        return
+      end
+
+      # Block workflow progress until the specified block evaluates to true.
+      def wait_until(&unblock_condition)
+        raise 'You must pass a block to wait_until' if unblock_condition.nil?
+
+        return if unblock_condition.call
+
+        fiber = Fiber.current
+
+        # wait_until condition blocks often read state modified by target-specfic handlers like
+        # signal handlers or callbacks for timer or activity completion. Running the wait_until
+        # handlers after the other handlers ensures that state is correctly updated before being
+        # read.
+        handler = dispatcher.register_handler(
+          Dispatcher::WILDCARD, # any target
+          Dispatcher::WILDCARD, # any event type
+          Dispatcher::Order::AT_END) do
+          fiber.resume if unblock_condition.call
+        end
+
+        stack_trace_tracker&.record
+        begin
+          Fiber.yield
+        ensure
+          stack_trace_tracker&.clear
+          handler.unregister
+        end
 
         return
       end
@@ -290,12 +324,31 @@ module Temporal
         state_manager.local_time
       end
 
-      def on_signal(&block)
-        target = History::EventTarget.workflow
-
-        dispatcher.register_handler(target, 'signaled') do |signal, input|
-          call_in_fiber(block, signal, input)
+      # Define a signal handler to receive signals onto the workflow. When
+      # +name+ is defined, this creates a named signal handler which will be
+      # invoked whenever a signal named +name+ is received. A handler without
+      # a set name (defaults to nil) will be the default handler and will receive
+      # all signals that do not match a named signal handler.
+      #
+      # @param signal_name [String, Symbol, nil] an optional signal name; converted to a String
+      def on_signal(signal_name = nil, &block)
+        if signal_name
+          target = Signal.new(signal_name)
+          dispatcher.register_handler(target, 'signaled') do |_, input|
+            # do not pass signal name when triggering a named handler
+            call_in_fiber(block, input)
+          end
+        else
+          dispatcher.register_handler(Dispatcher::WILDCARD, 'signaled') do |signal, input|
+            call_in_fiber(block, signal, input)
+          end
         end
+
+        return
+      end
+
+      def on_query(query, &block)
+        query_registry.register(query, &block)
       end
 
       def cancel_activity(activity_id)
@@ -330,8 +383,6 @@ module Temporal
       #
       # @return [Future] future
       def signal_external_workflow(workflow, signal, workflow_id, run_id = nil, input = nil, namespace: nil, child_workflow_only: false)
-        options ||= {}
-
         execution_options = ExecutionOptions.new(workflow, {}, config.default_execution_options)
 
         command = Command::SignalExternalWorkflow.new(
@@ -375,6 +426,9 @@ module Temporal
       #
       def upsert_search_attributes(search_attributes)
         search_attributes = Helpers.process_search_attributes(search_attributes)
+        if search_attributes.empty?
+          raise ArgumentError, "Cannot upsert an empty hash for search_attributes, as this would do nothing."
+        end
         command = Command::UpsertSearchAttributes.new(
           search_attributes: search_attributes
         )
@@ -384,7 +438,7 @@ module Temporal
 
       private
 
-      attr_reader :state_manager, :dispatcher, :workflow_class
+      attr_reader :state_manager, :dispatcher, :workflow_class, :query_registry, :stack_trace_tracker
 
       def completed!
         @completed = true

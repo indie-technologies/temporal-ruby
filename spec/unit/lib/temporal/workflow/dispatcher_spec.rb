@@ -6,12 +6,55 @@ describe Temporal::Workflow::Dispatcher do
   let(:other_target) { Temporal::Workflow::History::EventTarget.new(2, Temporal::Workflow::History::EventTarget::TIMER_TYPE) }
 
   describe '#register_handler' do
-    it 'stores a given handler against the target' do
-      block = -> { 'handler body' }
+    let(:block) { -> { 'handler body' } }
+    let(:event_name) { 'signaled' }
+    let(:dispatcher) do
+      subject.register_handler(target, event_name, &block)
+      subject
+    end
+    let(:handlers) { dispatcher.send(:event_handlers) }
 
-      subject.register_handler(target, 'signaled', &block)
+    it 'stores the target' do
+      expect(handlers.key?(target)).to be true
+    end
 
-      expect(subject.send(:handlers)).to include(target => [['signaled', block]])
+    it 'stores the target and handler once' do
+      expect(handlers[target]).to be_kind_of(Hash)
+      expect(handlers[target].count).to eq 1
+    end
+
+    it 'associates the event name with the target' do
+      event = handlers[target][1]
+      expect(event.event_name).to eq(event_name)
+    end
+
+    it 'associates the handler with the target' do
+      event = handlers[target][1]
+      expect(event.handler).to eq(block)
+    end
+
+    it 'removes a given handler against the target' do
+      block1 = -> { 'handler body' }
+      block2 = -> { 'other handler body' }
+      block3 = -> { 'yet another handler body' }
+
+      handle1 = subject.register_handler(target, 'signaled', &block1)
+      subject.register_handler(target, 'signaled', &block2)
+      subject.register_handler(other_target, 'signaled', &block3)
+
+      expect(handlers[target][1].event_name).to eq('signaled')
+      expect(handlers[target][1].handler).to be(block1)
+
+      expect(handlers[target][2].event_name).to eq('signaled')
+      expect(handlers[target][2].handler).to be(block2)
+
+      expect(handlers[other_target][3].event_name).to eq('signaled')
+      expect(handlers[other_target][3].handler).to be(block3)
+
+      handle1.unregister
+      expect(handlers[target][1]).to be(nil)
+      expect(handlers[target][2]).to_not be(nil)
+      expect(handlers[other_target][3]).to_not be(nil)
     end
   end
 
@@ -68,12 +111,15 @@ describe Temporal::Workflow::Dispatcher do
       end
     end
 
-    context 'with TARGET_WILDCARD target handler' do
+    context 'with WILDCARD target handler' do
       let(:handler_6) { -> { 'sixth block' } }
+      let(:handler_7) { -> { 'seventh block' } }
       before do
         allow(handler_6).to receive(:call)
+        allow(handler_7).to receive(:call)
 
-        subject.register_handler(described_class::TARGET_WILDCARD, described_class::WILDCARD, &handler_6)
+        subject.register_handler(described_class::WILDCARD, described_class::WILDCARD, &handler_6)
+        subject.register_handler(target, 'completed', &handler_7)
       end
 
       it 'calls the handler' do
@@ -83,10 +129,39 @@ describe Temporal::Workflow::Dispatcher do
         expect(handler_1).to have_received(:call).ordered
         expect(handler_4).to have_received(:call).ordered
         expect(handler_6).to have_received(:call).ordered
+        expect(handler_7).to have_received(:call).ordered
       end
 
-      it 'TARGET_WILDCARD can be compared to an EventTarget object' do
-        expect(target.eql?(described_class::TARGET_WILDCARD)).to be(false)
+      it 'WILDCARD can be compared to an EventTarget object' do
+        expect(target.eql?(described_class::WILDCARD)).to be(false)
+      end
+    end
+
+    context 'with AT_END order' do
+      let(:handler_5) { -> { 'fifth block' } }
+      let(:handler_6) { -> { 'sixth block' } }
+      let(:handler_7) { -> { 'seventh block' } }
+      before do
+        allow(handler_5).to receive(:call)
+        allow(handler_6).to receive(:call)
+        allow(handler_7).to receive(:call)
+
+        subject.register_handler(described_class::WILDCARD, described_class::WILDCARD, described_class::Order::AT_END, &handler_5)
+        subject.register_handler(described_class::WILDCARD, described_class::WILDCARD, described_class::Order::AT_END, &handler_6)
+        subject.register_handler(target, 'completed', &handler_7)
+      end
+
+      it 'calls the handler' do
+        subject.dispatch(target, 'completed')
+
+        # Target handlers still invoked
+        expect(handler_1).to have_received(:call).ordered
+        expect(handler_4).to have_received(:call).ordered
+        expect(handler_7).to have_received(:call).ordered
+
+        # AT_END handlers are invoked at the end, in order
+        expect(handler_5).to have_received(:call).ordered
+        expect(handler_6).to have_received(:call).ordered
       end
     end
   end

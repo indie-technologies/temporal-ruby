@@ -62,7 +62,8 @@ describe Temporal::Client do
             execution_timeout: Temporal.configuration.timeouts[:execution],
             workflow_id_reuse_policy: nil,
             headers: {},
-            memo: {}
+            memo: {},
+            search_attributes: {},
           )
       end
 
@@ -75,7 +76,9 @@ describe Temporal::Client do
             namespace: 'test-namespace',
             task_queue: 'test-task-queue',
             headers: { 'Foo' => 'Bar' },
-            memo: { 'MemoKey1' => 'MemoValue1' }
+            workflow_id_reuse_policy: :reject,
+            memo: { 'MemoKey1' => 'MemoValue1' },
+            search_attributes: { 'SearchAttribute1' => 256 },
           }
         )
 
@@ -90,9 +93,10 @@ describe Temporal::Client do
             task_timeout: Temporal.configuration.timeouts[:task],
             run_timeout: Temporal.configuration.timeouts[:run],
             execution_timeout: Temporal.configuration.timeouts[:execution],
-            workflow_id_reuse_policy: nil,
+            workflow_id_reuse_policy: :reject,
             headers: { 'Foo' => 'Bar' },
-            memo: { 'MemoKey1' => 'MemoValue1' }
+            memo: { 'MemoKey1' => 'MemoValue1' },
+            search_attributes: { 'SearchAttribute1' => 256 },
           )
       end
 
@@ -118,7 +122,8 @@ describe Temporal::Client do
             execution_timeout: Temporal.configuration.timeouts[:execution],
             workflow_id_reuse_policy: nil,
             headers: {},
-            memo: {}
+            memo: {},
+            search_attributes: {},
           )
       end
 
@@ -138,7 +143,8 @@ describe Temporal::Client do
             execution_timeout: Temporal.configuration.timeouts[:execution],
             workflow_id_reuse_policy: nil,
             headers: {},
-            memo: {}
+            memo: {},
+            search_attributes: {},
           )
       end
 
@@ -160,7 +166,8 @@ describe Temporal::Client do
             execution_timeout: Temporal.configuration.timeouts[:execution],
             workflow_id_reuse_policy: :allow,
             headers: {},
-            memo: {}
+            memo: {},
+            search_attributes: {},
           )
       end
     end
@@ -186,7 +193,8 @@ describe Temporal::Client do
             execution_timeout: Temporal.configuration.timeouts[:execution],
             workflow_id_reuse_policy: nil,
             headers: {},
-            memo: {}
+            memo: {},
+            search_attributes: {},
           )
       end
     end
@@ -214,6 +222,7 @@ describe Temporal::Client do
           workflow_id_reuse_policy: nil,
           headers: {},
           memo: {},
+          search_attributes: {},
           signal_name: 'the question',
           signal_input: expected_signal_argument,
         )
@@ -294,6 +303,7 @@ describe Temporal::Client do
           execution_timeout: Temporal.configuration.timeouts[:execution],
           workflow_id_reuse_policy: nil,
           memo: {},
+          search_attributes: {},
           headers: {},
         )
     end
@@ -827,8 +837,7 @@ describe Temporal::Client do
 
     it 'returns a list of executions' do
       executions = subject.list_open_workflow_executions(namespace, from)
-
-      expect(executions.length).to eq(1)
+      expect(executions.count).to eq(1)
       expect(executions.first).to be_an_instance_of(Temporal::Workflow::ExecutionInfo)
     end
 
@@ -859,33 +868,98 @@ describe Temporal::Client do
       end
 
       it 'calls the API 3 times' do
-        subject.list_open_workflow_executions(namespace, from)
+        subject.list_open_workflow_executions(namespace, from).count
 
         expect(connection).to have_received(:list_open_workflow_executions).exactly(3).times
 
         expect(connection)
           .to have_received(:list_open_workflow_executions)
-          .with(namespace: namespace, from: from, to: now, next_page_token: nil)
+          .with(namespace: namespace, from: from, to: now, next_page_token: nil, max_page_size: nil)
           .once
 
         expect(connection)
           .to have_received(:list_open_workflow_executions)
-          .with(namespace: namespace, from: from, to: now, next_page_token: 'a')
+          .with(namespace: namespace, from: from, to: now, next_page_token: 'a', max_page_size: nil)
           .once
 
         expect(connection)
           .to have_received(:list_open_workflow_executions)
-          .with(namespace: namespace, from: from, to: now, next_page_token: 'b')
+          .with(namespace: namespace, from: from, to: now, next_page_token: 'b', max_page_size: nil)
           .once
       end
 
       it 'returns a list of executions' do
         executions = subject.list_open_workflow_executions(namespace, from)
 
-        expect(executions.length).to eq(3)
+        expect(executions.count).to eq(3)
         executions.each do |execution|
           expect(execution).to be_an_instance_of(Temporal::Workflow::ExecutionInfo)
         end
+      end
+
+      it 'returns the next page token and paginates correctly' do        
+        executions1 = subject.list_open_workflow_executions(namespace, from, max_page_size: 10)
+        executions1.map do |execution|
+          expect(execution).to be_an_instance_of(Temporal::Workflow::ExecutionInfo)
+        end
+        expect(executions1.next_page_token).to eq('a')
+        expect(connection)
+          .to have_received(:list_open_workflow_executions)
+          .with(namespace: namespace, from: from, to: now, next_page_token: nil, max_page_size: 10)
+          .once
+
+        executions2 = subject.list_open_workflow_executions(namespace, from, next_page_token: executions1.next_page_token, max_page_size: 10)
+        executions2.map do |execution|
+          expect(execution).to be_an_instance_of(Temporal::Workflow::ExecutionInfo)
+        end
+        expect(executions2.next_page_token).to eq('b')
+        expect(connection)
+          .to have_received(:list_open_workflow_executions)
+          .with(namespace: namespace, from: from, to: now, next_page_token: 'a', max_page_size: 10)
+          .once
+
+        executions3 = subject.list_open_workflow_executions(namespace, from, next_page_token: executions2.next_page_token, max_page_size: 10)
+        executions3.map do |execution|
+          expect(execution).to be_an_instance_of(Temporal::Workflow::ExecutionInfo)
+        end
+        expect(executions3.next_page_token).to eq('')
+        expect(connection)
+          .to have_received(:list_open_workflow_executions)
+          .with(namespace: namespace, from: from, to: now, next_page_token: 'a', max_page_size: 10)
+          .once
+      end
+
+      it 'returns the next page and paginates correctly' do        
+        executions1 = subject.list_open_workflow_executions(namespace, from, max_page_size: 10)
+        executions1.map do |execution|
+          expect(execution).to be_an_instance_of(Temporal::Workflow::ExecutionInfo)
+        end
+        expect(executions1.next_page_token).to eq('a')
+        expect(connection)
+          .to have_received(:list_open_workflow_executions)
+          .with(namespace: namespace, from: from, to: now, next_page_token: nil, max_page_size: 10)
+          .once
+
+        executions2 = executions1.next_page
+        executions2.map do |execution|
+          expect(execution).to be_an_instance_of(Temporal::Workflow::ExecutionInfo)
+        end
+        expect(executions2.next_page_token).to eq('b')
+        expect(connection)
+          .to have_received(:list_open_workflow_executions)
+          .with(namespace: namespace, from: from, to: now, next_page_token: 'a', max_page_size: 10)
+          .once
+
+        executions3 = executions2.next_page
+        executions3.map do |execution|
+          expect(execution).to be_an_instance_of(Temporal::Workflow::ExecutionInfo)
+        end
+        expect(executions3.next_page_token).to eq('')
+        expect(connection)
+          .to have_received(:list_open_workflow_executions)
+          .with(namespace: namespace, from: from, to: now, next_page_token: 'a', max_page_size: 10)
+          .once
+
       end
     end
 
@@ -894,7 +968,7 @@ describe Temporal::Client do
 
       it 'raises ArgumentError' do
         expect do
-          subject.list_open_workflow_executions(namespace, from, filter: filter)
+          subject.list_open_workflow_executions(namespace, from, filter: filter).to_a
         end.to raise_error(ArgumentError, 'Allowed filters are: [:workflow, :workflow_id]')
       end
     end
@@ -904,48 +978,48 @@ describe Temporal::Client do
 
       it 'raises ArgumentError' do
         expect do
-          subject.list_open_workflow_executions(namespace, from, filter: filter)
+          subject.list_open_workflow_executions(namespace, from, filter: filter).count
         end.to raise_error(ArgumentError, 'Only one filter is allowed')
       end
     end
 
     context 'when called without filters' do
       it 'makes a request' do
-        subject.list_open_workflow_executions(namespace, from)
+        subject.list_open_workflow_executions(namespace, from).to_a
 
         expect(connection)
           .to have_received(:list_open_workflow_executions)
-          .with(namespace: namespace, from: from, to: now, next_page_token: nil)
+          .with(namespace: namespace, from: from, to: now, next_page_token: nil, max_page_size: nil)
       end
     end
 
     context 'when called with :to' do
       it 'makes a request' do
-        subject.list_open_workflow_executions(namespace, from, now - 10)
+        subject.list_open_workflow_executions(namespace, from, now - 10).to_a
 
         expect(connection)
           .to have_received(:list_open_workflow_executions)
-          .with(namespace: namespace, from: from, to: now - 10, next_page_token: nil)
+          .with(namespace: namespace, from: from, to: now - 10, next_page_token: nil, max_page_size: nil)
       end
     end
 
     context 'when called with a :workflow filter' do
       it 'makes a request' do
-        subject.list_open_workflow_executions(namespace, from, filter: { workflow: 'TestWorkflow' })
+        subject.list_open_workflow_executions(namespace, from, filter: { workflow: 'TestWorkflow' }).to_a
 
         expect(connection)
           .to have_received(:list_open_workflow_executions)
-          .with(namespace: namespace, from: from, to: now, next_page_token: nil, workflow: 'TestWorkflow')
+          .with(namespace: namespace, from: from, to: now, next_page_token: nil, workflow: 'TestWorkflow', max_page_size: nil)
       end
     end
 
     context 'when called with a :workflow_id filter' do
       it 'makes a request' do
-        subject.list_open_workflow_executions(namespace, from, filter: { workflow_id: 'xxx' })
+        subject.list_open_workflow_executions(namespace, from, filter: { workflow_id: 'xxx' }).to_a
 
         expect(connection)
           .to have_received(:list_open_workflow_executions)
-          .with(namespace: namespace, from: from, to: now, next_page_token: nil, workflow_id: 'xxx')
+          .with(namespace: namespace, from: from, to: now, next_page_token: nil, workflow_id: 'xxx', max_page_size: nil)
       end
     end
   end
