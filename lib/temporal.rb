@@ -28,7 +28,8 @@ module Temporal
                  :fail_activity,
                  :list_open_workflow_executions,
                  :list_closed_workflow_executions,
-                 :request_cancel_workflow_execution
+                 :request_cancel_workflow_execution,
+                 :get_workflow_history
 
   class << self
     def configure(&block)
