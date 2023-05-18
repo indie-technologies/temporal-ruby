@@ -24,7 +24,7 @@ module Temporal
       config = Temporal.configuration,
       activity_thread_pool_size: Temporal::Activity::Poller::DEFAULT_OPTIONS[:thread_pool_size],
       workflow_thread_pool_size: Temporal::Workflow::Poller::DEFAULT_OPTIONS[:thread_pool_size],
-      task_queue_activities_per_second: Temporal::Activity::Poller::DEFAULT_OPTIONS[:max_tasks_per_second]
+      task_queue_activities_per_second: Temporal::Activity::Poller::DEFAULT_OPTIONS[:max_tasks_per_second],
       binary_checksum: Temporal::Workflow::Poller::DEFAULT_OPTIONS[:binary_checksum]
     )
       @config = config
