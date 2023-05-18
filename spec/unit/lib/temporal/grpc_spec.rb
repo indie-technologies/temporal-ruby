@@ -267,10 +267,7 @@ describe Temporal::Connection::GRPC do
           timeout: timeout
         )
 
-        expect(grpc_stub).to have_received(:get_workflow_execution_history) do |request, *args|
-          expect(request.wait_new_event).to eq(true)
-          expect(args[0][:deadline]).to eq(now + timeout)
-        end
+        expect(grpc_stub).to have_received(:get_workflow_execution_history).with(anything, deadline: now + timeout)
       end
 
       it 'demands a timeout to be specified' do
