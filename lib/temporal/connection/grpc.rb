@@ -405,10 +405,8 @@ module Temporal
         )
 
         if workflow_id_reuse_policy
-          policy = WORKFLOW_ID_REUSE_POLICY[workflow_id_reuse_policy]
-          raise Client::ArgumentError, 'Unknown workflow_id_reuse_policy specified' unless policy
-
-          request.workflow_id_reuse_policy = policy
+          request.workflow_id_reuse_policy =
+            Temporal::Connection::Serializer::WorkflowIdReusePolicy.new(workflow_id_reuse_policy).to_proto
         end
 
         client.signal_with_start_workflow_execution(request)
